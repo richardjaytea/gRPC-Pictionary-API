@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package = "github.com/richardjaytea/infipic/pb";
+
+import "google/protobuf/empty.proto";
+
+/******************** CHAT SERVICE  **********************/
+
+service Chat {
+  rpc ConnectChat(google.protobuf.Empty) returns (Client) {}
+  rpc GetMessages(Client) returns (stream MessageResponse) {}
+  rpc SendMessage(MessageRequest) returns (google.protobuf.Empty) {}
+}
+
+message Client {
+  string id = 1;
+}
+
+message MessageRequest {
+  string id = 1;
+  string content = 2;
+}
+
+message MessageResponse {
+  string id = 1;
+  string content = 2;
+  string timestamp = 3;
+}
+
+/******************** IMAGE SERVICE  **********************/
+
+service Image {
+  rpc GetImage(google.protobuf.Empty) returns (stream ImageResponse) {}
+  rpc GetCountdown(google.protobuf.Empty) returns (stream CountdownResponse) {}
+}
+
+message ImageResponse {
+  bytes content = 1;
+  string word = 2;
+}
+
+message CountdownResponse {
+  int32 time = 1;
+}

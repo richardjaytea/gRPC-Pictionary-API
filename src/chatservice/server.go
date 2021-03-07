@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/google/uuid"
-	"github.com/richardjaytea/infipic/proto/chat"
+	"github.com/richardjaytea/infipic/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/examples/data"
@@ -25,28 +25,28 @@ var (
 )
 
 type chatServer struct {
-	chat.UnimplementedChatServer
-	messageStreams map[string]chat.Chat_GetMessagesServer
+	pb.UnimplementedChatServer
+	messageStreams map[string]pb.Chat_GetMessagesServer
 }
 
-func (s *chatServer) ConnectChat(ctx context.Context, empty *empty.Empty) (*chat.Client, error) {
+func (s *chatServer) ConnectChat(ctx context.Context, empty *empty.Empty) (*pb.Client, error) {
 	id := uuid.NewString()
 	s.messageStreams[id] = nil
 	log.Printf("New Client Connection: %s", id)
 	s.broadcastWelcomeMessage(ctx, id)
-	return &chat.Client{Id: id}, nil
+	return &pb.Client{Id: id}, nil
 }
 
-func (s *chatServer) GetMessages(client *chat.Client, stream chat.Chat_GetMessagesServer) error {
+func (s *chatServer) GetMessages(client *pb.Client, stream pb.Chat_GetMessagesServer) error {
 	s.messageStreams[client.Id] = stream
 	log.Printf("Added Stream: %s", client.Id)
 	s.keepAliveTillClose(client.Id)
 	return nil
 }
 
-func (s *chatServer) SendMessage(ctx context.Context, message *chat.MessageRequest) (*empty.Empty, error) {
+func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest) (*empty.Empty, error) {
 	log.Println("Broadcasting Message")
-	response := &chat.MessageResponse{
+	response := &pb.MessageResponse{
 		Id:        message.Id,
 		Content:   message.Content,
 		Timestamp: time.Now().Format(time.RFC822),
@@ -67,7 +67,7 @@ func (s *chatServer) SendMessage(ctx context.Context, message *chat.MessageReque
 func (s *chatServer) broadcastWelcomeMessage(ctx context.Context, id string) {
 	_, _ = s.SendMessage(
 		ctx,
-		&chat.MessageRequest{
+		&pb.MessageRequest{
 			Id:      id,
 			Content: fmt.Sprintf("Welcome %s", id),
 		},
@@ -78,6 +78,8 @@ func (s *chatServer) keepAliveTillClose(id string) {
 	stream := s.messageStreams[id]
 	select {
 	case <-stream.Context().Done():
+		// TODO: Lock map for deletion?
+		delete(s.messageStreams, id)
 		log.Printf("Connection Disconnected: %s", id)
 		return
 	}
@@ -85,7 +87,7 @@ func (s *chatServer) keepAliveTillClose(id string) {
 
 func newServer() *chatServer {
 	s := &chatServer{
-		messageStreams: make(map[string]chat.Chat_GetMessagesServer),
+		messageStreams: make(map[string]pb.Chat_GetMessagesServer),
 	}
 	return s
 }
@@ -111,7 +113,7 @@ func main() {
 		opts = []grpc.ServerOption{grpc.Creds(creds)}
 	}
 	grpcServer := grpc.NewServer(opts...)
-	chat.RegisterChatServer(grpcServer, newServer())
+	pb.RegisterChatServer(grpcServer, newServer())
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve Chat: %v", err)
 	}

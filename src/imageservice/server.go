@@ -62,9 +62,11 @@ func (s *imageServer) GetImage(r *pb.Room, stream pb.Image_GetImageServer) error
 func (s *imageServer) sendWord(roomKey string, word string) {
 	time.Sleep(10 * time.Second)
 	stream := *s.roomWordStreams[roomKey]
-	stream.Send(&pb.WordResponse{
+	if err := stream.Send(&pb.WordResponse{
 		Word: word,
-	})
+	}); err != nil {
+		log.Println(err)
+	}
 }
 
 func newServer() *imageServer {
@@ -75,13 +77,7 @@ func newServer() *imageServer {
 	roomImage = make(map[string]string)
 	roomWord = make(map[string]string)
 
-	for _, v := range rooms {
-		s.roomImageStreams[v] = nil
-		s.roomWordStreams[v] = nil
-		roomImage[v] = ""
-		roomWord[v] = ""
-	}
-
+	// test
 	go s.sendWord(rooms[0], "cat")
 
 	return s

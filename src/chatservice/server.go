@@ -24,7 +24,7 @@ var (
 	port               = flag.Int("port", 10000, "The server port")
 	emp                = empty.Empty{}
 	caFile             = flag.String("ca_file", "", "The file containing the CA root cert file")
-	serverAddr         = flag.String("server_addr", "localhost:10001", "The server address in the format of host:port")
+	serverAddrImage    = flag.String("server_addr_image", "localhost:10001", "The server address for the image service server")
 	serverHostOverride = flag.String("server_host_override", "x.test.youtube.com", "The server name used to verify the hostname returned by the TLS handshake")
 )
 
@@ -43,13 +43,7 @@ type chatServer struct {
 
 func (s *chatServer) ConnectChat(ctx context.Context, r *pb.Room) (*pb.Client, error) {
 	id := uuid.NewString()
-
-	// Any other way to init map than this?
-	if s.roomChatStreams[r.Key] == nil {
-		s.roomChatStreams[r.Key] = messageStreamMap{r.Key: nil}
-	} else {
-		s.roomChatStreams[r.Key][id] = nil
-	}
+	s.roomChatStreams[r.Key][id] = nil
 
 	log.Printf("New Client Connection: %s", id)
 	s.broadcastWelcomeMessage(ctx, id, r.Key)
@@ -143,8 +137,7 @@ func newServer() *chatServer {
 	roomWord = make(map[string]string)
 
 	for _, v := range rooms {
-		s.roomChatStreams[v] = nil
-		roomWord[v] = ""
+		s.roomChatStreams[v] = messageStreamMap{}
 	}
 
 	go s.connectServices()
@@ -169,7 +162,7 @@ func (s *chatServer) connectServices() {
 	}
 
 	opts = append(opts, grpc.WithBlock())
-	conn, err := grpc.Dial(*serverAddr, opts...)
+	conn, err := grpc.Dial(*serverAddrImage, opts...)
 	if err != nil {
 		log.Fatalf("fail to dial: %v", err)
 	}

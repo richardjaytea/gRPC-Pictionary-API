@@ -10,37 +10,56 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/examples/data"
+	"io"
 	"log"
 	"net"
 	"time"
 )
 
 var (
-	tls        = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
-	certFile   = flag.String("cert_file", "", "The TLS cert file")
-	keyFile    = flag.String("key_file", "", "The TLS key file")
-	jsonDBFile = flag.String("json_db_file", "", "A json file containing a list of features")
-	port       = flag.Int("port", 10000, "The server port")
-	emp        = empty.Empty{}
+	tls                = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
+	certFile           = flag.String("cert_file", "", "The TLS cert file")
+	keyFile            = flag.String("key_file", "", "The TLS key file")
+	jsonDBFile         = flag.String("json_db_file", "", "A json file containing a list of features")
+	port               = flag.Int("port", 10000, "The server port")
+	emp                = empty.Empty{}
+	caFile             = flag.String("ca_file", "", "The file containing the CA root cert file")
+	serverAddr         = flag.String("server_addr", "localhost:10001", "The server address in the format of host:port")
+	serverHostOverride = flag.String("server_host_override", "x.test.youtube.com", "The server name used to verify the hostname returned by the TLS handshake")
 )
+
+var (
+	rooms    = []string{"test_room"}
+	roomWord map[string]string
+)
+
+type messageStreamMap map[string]*pb.Chat_GetMessagesServer
 
 type chatServer struct {
 	pb.UnimplementedChatServer
-	messageStreams map[string]pb.Chat_GetMessagesServer
+	roomChatStreams map[string]messageStreamMap
+	imageClient     pb.ImageClient
 }
 
-func (s *chatServer) ConnectChat(ctx context.Context, empty *empty.Empty) (*pb.Client, error) {
+func (s *chatServer) ConnectChat(ctx context.Context, r *pb.Room) (*pb.Client, error) {
 	id := uuid.NewString()
-	s.messageStreams[id] = nil
+
+	// Any other way to init map than this?
+	if s.roomChatStreams[r.Key] == nil {
+		s.roomChatStreams[r.Key] = messageStreamMap{r.Key: nil}
+	} else {
+		s.roomChatStreams[r.Key][id] = nil
+	}
+
 	log.Printf("New Client Connection: %s", id)
-	s.broadcastWelcomeMessage(ctx, id)
-	return &pb.Client{Id: id}, nil
+	s.broadcastWelcomeMessage(ctx, id, r.Key)
+	return &pb.Client{Id: id, RoomKey: r.Key}, nil
 }
 
 func (s *chatServer) GetMessages(client *pb.Client, stream pb.Chat_GetMessagesServer) error {
-	s.messageStreams[client.Id] = stream
+	s.roomChatStreams[client.RoomKey][client.Id] = &stream
 	log.Printf("Added Stream: %s", client.Id)
-	s.keepAliveTillClose(client.Id)
+	s.keepAliveTillClose(client.Id, client.RoomKey)
 	return nil
 }
 
@@ -52,9 +71,9 @@ func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest
 		Timestamp: time.Now().Format(time.RFC822),
 	}
 
-	for _, stream := range s.messageStreams {
-		if stream != nil {
-			if err := stream.Send(response); err != nil {
+	for _, stream := range s.roomChatStreams[message.RoomKey] {
+		if stream != nil && *stream != nil {
+			if err := (*stream).Send(response); err != nil {
 				log.Println(err)
 				return &emp, err
 			}
@@ -64,32 +83,99 @@ func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest
 	return &emp, nil
 }
 
-func (s *chatServer) broadcastWelcomeMessage(ctx context.Context, id string) {
+func (s *chatServer) broadcastWelcomeMessage(ctx context.Context, id string, roomKey string) {
 	_, _ = s.SendMessage(
 		ctx,
 		&pb.MessageRequest{
 			Id:      id,
+			RoomKey: roomKey,
 			Content: fmt.Sprintf("Welcome %s", id),
 		},
 	)
 }
 
-func (s *chatServer) keepAliveTillClose(id string) {
-	stream := s.messageStreams[id]
+func (s *chatServer) keepAliveTillClose(id string, roomKey string) {
+	stream := *s.roomChatStreams[roomKey][id]
 	select {
 	case <-stream.Context().Done():
 		// TODO: Lock map for deletion?
-		delete(s.messageStreams, id)
+		delete(s.roomChatStreams[roomKey], id)
 		log.Printf("Connection Disconnected: %s", id)
 		return
 	}
 }
 
+func (s *chatServer) getImageWord() {
+	for _, v := range rooms {
+		stream, err := s.imageClient.GetWord(
+			context.Background(),
+			&pb.Room{
+				Key: v,
+			})
+		if err != nil {
+			log.Fatalf("%v.GetWord(_) = _, %v", s.imageClient, err)
+		}
+		go keepWordUpdated(stream, v)
+	}
+}
+
+func keepWordUpdated(stream pb.Image_GetWordClient, roomKey string) {
+	for {
+		word, err := stream.Recv()
+
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Fatalf("keepWordUpdated(_) = _, %v", err)
+		}
+
+		roomWord[roomKey] = word.GetWord()
+		log.Printf("Got Word: %s", roomWord[roomKey])
+		log.Println(roomWord)
+	}
+}
+
 func newServer() *chatServer {
 	s := &chatServer{
-		messageStreams: make(map[string]pb.Chat_GetMessagesServer),
+		roomChatStreams: make(map[string]messageStreamMap),
 	}
+	roomWord = make(map[string]string)
+
+	for _, v := range rooms {
+		s.roomChatStreams[v] = nil
+		roomWord[v] = ""
+	}
+
+	go s.connectServices()
+
 	return s
+}
+
+func (s *chatServer) connectServices() {
+	flag.Parse()
+	var opts []grpc.DialOption
+	if *tls {
+		if *caFile == "" {
+			*caFile = data.Path("x509/ca_cert.pem")
+		}
+		creds, err := credentials.NewClientTLSFromFile(*caFile, *serverHostOverride)
+		if err != nil {
+			log.Fatalf("Failed to create TLS credentials %v", err)
+		}
+		opts = append(opts, grpc.WithTransportCredentials(creds))
+	} else {
+		opts = append(opts, grpc.WithInsecure())
+	}
+
+	opts = append(opts, grpc.WithBlock())
+	conn, err := grpc.Dial(*serverAddr, opts...)
+	if err != nil {
+		log.Fatalf("fail to dial: %v", err)
+	}
+	// defer conn.Close()
+	s.imageClient = pb.NewImageClient(conn)
+	s.getImageWord()
 }
 
 func main() {

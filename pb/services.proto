@@ -6,21 +6,29 @@ option go_package = "github.com/richardjaytea/infipic/pb";
 
 import "google/protobuf/empty.proto";
 
+/******************** GLOBAL MESSAGES  **********************/
+
+message Room {
+  string key = 1;
+}
+
 /******************** CHAT SERVICE  **********************/
 
 service Chat {
-  rpc ConnectChat(google.protobuf.Empty) returns (Client) {}
+  rpc ConnectChat(Room) returns (Client) {}
   rpc GetMessages(Client) returns (stream MessageResponse) {}
   rpc SendMessage(MessageRequest) returns (google.protobuf.Empty) {}
 }
 
 message Client {
   string id = 1;
+  string roomKey = 2;
 }
 
 message MessageRequest {
   string id = 1;
-  string content = 2;
+  string roomKey = 2;
+  string content = 3;
 }
 
 message MessageResponse {
@@ -32,13 +40,17 @@ message MessageResponse {
 /******************** IMAGE SERVICE  **********************/
 
 service Image {
-  rpc GetImage(google.protobuf.Empty) returns (stream ImageResponse) {}
-  rpc GetCountdown(google.protobuf.Empty) returns (stream CountdownResponse) {}
+  rpc GetImage(Room) returns (stream ImageResponse) {}
+  rpc GetWord(Room) returns (stream WordResponse) {}
+  rpc GetCountdown(Room) returns (stream CountdownResponse) {}
 }
 
 message ImageResponse {
   bytes content = 1;
-  string word = 2;
+}
+
+message WordResponse {
+  string word = 1;
 }
 
 message CountdownResponse {

@@ -58,23 +58,32 @@ func (s *chatServer) GetMessages(client *pb.Client, stream pb.Chat_GetMessagesSe
 }
 
 func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest) (*empty.Empty, error) {
-	log.Println("Broadcasting Message")
-	response := &pb.MessageResponse{
-		Id:        message.Id,
-		Content:   message.Content,
-		Timestamp: time.Now().Format(time.RFC822),
-	}
-
-	for _, stream := range s.roomChatStreams[message.RoomKey] {
-		if stream != nil && *stream != nil {
-			if err := (*stream).Send(response); err != nil {
-				log.Println(err)
-				return &emp, err
+	if message.Content == roomWord[message.RoomKey] {
+		log.Println("Correct Guess!")
+		stream := s.roomChatStreams[message.RoomKey][message.Id]
+		(*stream).Send(buildMessageResponse("Server ID", "Your guess is correct!"))
+	} else {
+		log.Println("Broadcasting Message")
+		response := buildMessageResponse(message.Id, message.Content)
+		for _, stream := range s.roomChatStreams[message.RoomKey] {
+			if stream != nil && *stream != nil {
+				if err := (*stream).Send(response); err != nil {
+					log.Println(err)
+					return &emp, err
+				}
 			}
 		}
 	}
 
 	return &emp, nil
+}
+
+func buildMessageResponse(id string, content string) *pb.MessageResponse {
+	return &pb.MessageResponse{
+		Id:        id,
+		Content:   content,
+		Timestamp: time.Now().Format(time.RFC822),
+	}
 }
 
 func (s *chatServer) broadcastWelcomeMessage(ctx context.Context, id string, roomKey string) {

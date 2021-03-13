@@ -46,7 +46,7 @@ service Image {
 }
 
 message ImageResponse {
-  bytes content = 1;
+  string content = 1;
 }
 
 message WordResponse {

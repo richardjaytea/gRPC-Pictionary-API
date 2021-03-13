@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"github.com/golang/protobuf/ptypes/empty"
@@ -8,8 +9,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/examples/data"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"time"
 )
 
@@ -25,13 +28,15 @@ var (
 var (
 	// TODO: room_key should be coming from database
 	rooms     = []string{"test_room"}
-	roomImage map[string]string // map[string]bytes?
+	roomImage map[string]string
 	roomWord  map[string]string
 )
 
+type imageStreams []*pb.Image_GetImageServer
+
 type imageServer struct {
 	pb.UnimplementedImageServer
-	roomImageStreams map[string]*pb.Image_GetImageServer
+	roomImageStreams map[string]imageStreams
 	roomWordStreams  map[string]*pb.Image_GetWordServer
 }
 
@@ -48,7 +53,7 @@ func (s *imageServer) GetWord(r *pb.Room, stream pb.Image_GetWordServer) error {
 }
 
 func (s *imageServer) GetImage(r *pb.Room, stream pb.Image_GetImageServer) error {
-	s.roomImageStreams[r.Key] = &stream
+	s.roomImageStreams[r.Key] = append(s.roomImageStreams[r.Key], &stream)
 	log.Printf("Image Stream Created: %s", r.Key)
 	select {
 	case <-stream.Context().Done():
@@ -69,9 +74,21 @@ func (s *imageServer) sendWord(roomKey string, word string) {
 	}
 }
 
+func (s *imageServer) sendImage(roomKey string) {
+	for _, stream := range s.roomImageStreams[roomKey] {
+		if stream != nil && *stream != nil {
+			if err := (*stream).Send(&pb.ImageResponse{
+				Content: roomImage[roomKey],
+			}); err != nil {
+				log.Println(err)
+			}
+		}
+	}
+}
+
 func newServer() *imageServer {
 	s := &imageServer{
-		roomImageStreams: make(map[string]*pb.Image_GetImageServer),
+		roomImageStreams: make(map[string]imageStreams),
 		roomWordStreams:  make(map[string]*pb.Image_GetWordServer),
 	}
 	roomImage = make(map[string]string)
@@ -79,8 +96,32 @@ func newServer() *imageServer {
 
 	// test
 	go s.sendWord(rooms[0], "cat")
+	go s.testGetImage(rooms[0], "https://static.scientificamerican.com/sciam/cache/file/32665E6F-8D90-4567-9769D59E11DB7F26_source.jpg?w=590&h=800&7E4B4CAD-CAE1-4726-93D6A160C2B068B2")
 
 	return s
+}
+
+func (s *imageServer) testGetImage(roomKey, url string) {
+	time.Sleep(10 * time.Second)
+	response, err := http.Get(url)
+	if err != nil {
+		log.Fatalf("Couldn't GET image: %v", err)
+		return
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != 200 {
+		log.Fatal("Response code not 200")
+	}
+
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		log.Fatalf("Couldn't read image to bytes: %v", err)
+	}
+
+	roomImage[roomKey] = base64.StdEncoding.EncodeToString(body)
+	log.Println("Received image")
+	s.sendImage(roomKey)
 }
 
 func main() {

@@ -29,8 +29,9 @@ var (
 )
 
 var (
-	rooms    = []string{"test_room"}
-	roomWord map[string]string
+	rooms     = []string{"test_room"}
+	roomWords map[string][]string
+	userWords map[string][]string
 )
 
 type messageStreamMap map[string]*pb.Chat_GetMessagesServer
@@ -44,6 +45,7 @@ type chatServer struct {
 func (s *chatServer) ConnectChat(ctx context.Context, r *pb.Room) (*pb.Client, error) {
 	id := uuid.NewString()
 	s.roomChatStreams[r.Key][id] = nil
+	userWords[id] = nil
 
 	log.Printf("New Client Connection: %s", id)
 	s.broadcastWelcomeMessage(ctx, id, r.Key)
@@ -58,10 +60,16 @@ func (s *chatServer) GetMessages(client *pb.Client, stream pb.Chat_GetMessagesSe
 }
 
 func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest) (*empty.Empty, error) {
-	if message.Content == roomWord[message.RoomKey] {
-		log.Println("Correct Guess!")
+	if contains(roomWords[message.RoomKey], message.Content) {
 		stream := s.roomChatStreams[message.RoomKey][message.Id]
-		(*stream).Send(buildMessageResponse("Server ID", "Your guess is correct!"))
+		if contains(userWords[message.Id], message.Content) {
+			log.Println("Duplicate Guess!")
+			(*stream).Send(buildMessageResponse("Server ID", "You have already correctly guessed this word!"))
+		} else {
+			log.Println("Correct Guess!")
+			userWords[message.Id] = append(userWords[message.Id], message.Content)
+			(*stream).Send(buildMessageResponse("Server ID", "Your guess is correct!"))
+		}
 	} else {
 		log.Println("Broadcasting Message")
 		response := buildMessageResponse(message.Id, message.Content)
@@ -133,17 +141,42 @@ func keepWordUpdated(stream pb.Image_GetWordClient, roomKey string) {
 			log.Fatalf("keepWordUpdated(_) = _, %v", err)
 		}
 
-		roomWord[roomKey] = word.GetWord()
-		log.Printf("Got Word: %s", roomWord[roomKey])
-		log.Println(roomWord)
+		if word.GetWord() == "Sys Clear Words" {
+			clearWords(roomKey)
+		}
+
+		roomWords[roomKey] = append(roomWords[roomKey], word.GetWord())
+		log.Printf("Got Word: %s", roomWords[roomKey])
+		log.Println(roomWords)
 	}
+}
+
+func clearWords(roomKey string) {
+	var s []string
+	delete(roomWords, roomKey)
+	roomWords[roomKey] = s
+
+	for i, _ := range userWords {
+		userWords[i] = nil
+	}
+}
+
+func contains(s []string, c string) bool {
+	for _, v := range s {
+		if v == c {
+			return true
+		}
+	}
+
+	return false
 }
 
 func newServer() *chatServer {
 	s := &chatServer{
 		roomChatStreams: make(map[string]messageStreamMap),
 	}
-	roomWord = make(map[string]string)
+	roomWords = make(map[string][]string)
+	userWords = make(map[string][]string)
 
 	for _, v := range rooms {
 		s.roomChatStreams[v] = messageStreamMap{}

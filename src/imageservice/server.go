@@ -1,10 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"flag"
 	"fmt"
 	"github.com/golang/protobuf/ptypes/empty"
+	c "github.com/richardjaytea/infipic/config"
 	"github.com/richardjaytea/infipic/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -14,6 +16,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 var (
@@ -29,7 +33,7 @@ var (
 	// TODO: room_key should be coming from database
 	rooms     = []string{"test_room"}
 	roomImage map[string]string
-	roomWord  map[string]string
+	roomWord  map[string][]string
 )
 
 type imageStreams []*pb.Image_GetImageServer
@@ -38,6 +42,12 @@ type imageServer struct {
 	pb.UnimplementedImageServer
 	roomImageStreams map[string]imageStreams
 	roomWordStreams  map[string]*pb.Image_GetWordServer
+	DB               *sql.DB
+}
+
+type image struct {
+	Id  string `json:"photo_id"`
+	Url string `json:"photo_image_url"`
 }
 
 func (s *imageServer) GetWord(r *pb.Room, stream pb.Image_GetWordServer) error {
@@ -87,18 +97,47 @@ func (s *imageServer) sendImage(roomKey string) {
 }
 
 func newServer() *imageServer {
+	connectionString := fmt.Sprintf("host=%s port=%s user=%s "+
+		"password=%s dbname=%s sslmode=disable",
+		c.VGetEnv("APP_DB_HOST"),
+		c.VGetEnv("APP_DB_PORT"),
+		c.VGetEnv("APP_DB_USERNAME"),
+		c.VGetEnv("APP_DB_PASSWORD"),
+		c.VGetEnv("APP_DB_NAME"))
+
+	db, err := sql.Open("postgres", connectionString)
+	if err != nil {
+		panic(err)
+	}
+
+	err = db.Ping()
+	if err != nil {
+		panic(err)
+	}
+
+	log.Println("Connected to database!")
+
 	s := &imageServer{
 		roomImageStreams: make(map[string]imageStreams),
 		roomWordStreams:  make(map[string]*pb.Image_GetWordServer),
+		DB:               db,
 	}
-	roomImage = make(map[string]string)
-	roomWord = make(map[string]string)
-
-	// test
-	go s.sendWord(rooms[0], "cat")
-	go s.testGetImage(rooms[0], "https://static.scientificamerican.com/sciam/cache/file/32665E6F-8D90-4567-9769D59E11DB7F26_source.jpg?w=590&h=800&7E4B4CAD-CAE1-4726-93D6A160C2B068B2")
 
 	return s
+}
+
+func initVars() {
+	roomImage = make(map[string]string)
+	roomWord = make(map[string][]string)
+}
+
+func (s *imageServer) getRandomImage() image {
+	var i image
+	stmt := "SELECT photo_id, photo_image_url FROM unsplash_photos ORDER BY random() LIMIT 1"
+	s.DB.QueryRow(stmt).Scan(&i.Id, &i.Url)
+
+	log.Println(i)
+	return i
 }
 
 func (s *imageServer) testGetImage(roomKey, url string) {
@@ -145,7 +184,15 @@ func main() {
 		opts = []grpc.ServerOption{grpc.Creds(creds)}
 	}
 	grpcServer := grpc.NewServer(opts...)
-	pb.RegisterImageServer(grpcServer, newServer())
+	s := newServer()
+	initVars()
+	pb.RegisterImageServer(grpcServer, s)
+
+	// test
+	go s.sendWord(rooms[0], "cat")
+	i := s.getRandomImage()
+	go s.testGetImage(rooms[0], i.Url)
+
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve Chat: %v", err)
 	}

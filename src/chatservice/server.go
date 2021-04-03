@@ -4,16 +4,17 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	"log"
+	"net"
+	"time"
+
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/google/uuid"
 	"github.com/richardjaytea/infipic/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/examples/data"
-	"io"
-	"log"
-	"net"
-	"time"
 )
 
 var (
@@ -141,13 +142,14 @@ func keepWordUpdated(stream pb.Image_GetWordClient, roomKey string) {
 			log.Fatalf("keepWordUpdated(_) = _, %v", err)
 		}
 
-		if word.GetWord() == "Sys Clear Words" {
+		if word.GetWord() == "@SysClearWords" {
 			clearWords(roomKey)
+			continue
 		}
 
 		roomWords[roomKey] = append(roomWords[roomKey], word.GetWord())
-		log.Printf("Got Word: %s", roomWords[roomKey])
-		log.Println(roomWords)
+		log.Printf("Got Word: %s", word.GetWord())
+		log.Println(roomWords[roomKey])
 	}
 }
 

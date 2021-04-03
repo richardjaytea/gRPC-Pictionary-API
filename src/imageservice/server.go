@@ -2,20 +2,19 @@ package main
 
 import (
 	"database/sql"
-	"encoding/base64"
 	"flag"
 	"fmt"
+	"log"
+	"net"
+	"time"
+
 	"github.com/golang/protobuf/ptypes/empty"
 	c "github.com/richardjaytea/infipic/config"
 	"github.com/richardjaytea/infipic/pb"
+	"github.com/robfig/cron/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/examples/data"
-	"io/ioutil"
-	"log"
-	"net"
-	"net/http"
-	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -32,7 +31,7 @@ var (
 var (
 	// TODO: room_key should be coming from database
 	rooms     = []string{"test_room"}
-	roomImage map[string]string
+	roomImage map[string]image
 	roomWord  map[string][]string
 )
 
@@ -74,8 +73,15 @@ func (s *imageServer) GetImage(r *pb.Room, stream pb.Image_GetImageServer) error
 	}
 }
 
+func (s *imageServer) sendKeywords(roomKey string) {
+	time.Sleep(5 * time.Second)
+	s.sendWord(roomKey, "@SysClearWords")
+	for _, k := range roomWord[roomKey] {
+		s.sendWord(roomKey, k)
+	}
+}
+
 func (s *imageServer) sendWord(roomKey string, word string) {
-	time.Sleep(10 * time.Second)
 	stream := *s.roomWordStreams[roomKey]
 	if err := stream.Send(&pb.WordResponse{
 		Word: word,
@@ -85,10 +91,11 @@ func (s *imageServer) sendWord(roomKey string, word string) {
 }
 
 func (s *imageServer) sendImage(roomKey string) {
+	time.Sleep(5 * time.Second)
 	for _, stream := range s.roomImageStreams[roomKey] {
 		if stream != nil && *stream != nil {
 			if err := (*stream).Send(&pb.ImageResponse{
-				Content: roomImage[roomKey],
+				Content: roomImage[roomKey].Url,
 			}); err != nil {
 				log.Println(err)
 			}
@@ -127,40 +134,69 @@ func newServer() *imageServer {
 }
 
 func initVars() {
-	roomImage = make(map[string]string)
+	roomImage = make(map[string]image)
 	roomWord = make(map[string][]string)
 }
 
-func (s *imageServer) getRandomImage() image {
+func (s *imageServer) getRandomImage(roomKey string) {
 	var i image
 	stmt := "SELECT photo_id, photo_image_url FROM unsplash_photos ORDER BY random() LIMIT 1"
 	s.DB.QueryRow(stmt).Scan(&i.Id, &i.Url)
 
 	log.Println(i)
-	return i
+	roomImage[roomKey] = i
 }
 
-func (s *imageServer) testGetImage(roomKey, url string) {
-	time.Sleep(10 * time.Second)
-	response, err := http.Get(url)
-	if err != nil {
-		log.Fatalf("Couldn't GET image: %v", err)
+func (s *imageServer) getImageKeywords(roomKey string) {
+	stmt := `select
+				keyword
+			from
+				unsplash_keywords uk
+			where
+				photo_id = $1
+				and ((ai_service_1_confidence is not null
+				and ai_service_1_confidence > 40.0)
+				or (ai_service_2_confidence is not null
+				and ai_service_2_confidence > 40.0))
+				and suggested_by_user = false
+			order by
+				ai_service_1_confidence desc`
+
+	id := roomImage[roomKey].Id
+	r, err := s.DB.Query(stmt, id)
+	if err != nil && err != sql.ErrNoRows {
+		log.Fatalf("Error trying to get keywords for ID: %s", id)
 		return
 	}
-	defer response.Body.Close()
 
-	if response.StatusCode != 200 {
-		log.Fatal("Response code not 200")
+	var k []string
+	var v string
+
+	defer r.Close()
+	for r.Next() {
+		r.Scan(&v)
+		k = append(k, v)
 	}
 
-	body, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		log.Fatalf("Couldn't read image to bytes: %v", err)
-	}
+	roomWord[roomKey] = k
+	log.Println(roomWord[roomKey])
+}
 
-	roomImage[roomKey] = base64.StdEncoding.EncodeToString(body)
-	log.Println("Received image")
-	s.sendImage(roomKey)
+func (s *imageServer) refreshImageAndSendFunc() func() {
+	return func() {
+		for _, v := range rooms {
+			s.getRandomImage(v)
+			s.getImageKeywords(v)
+			go s.sendImage(v)
+			go s.sendKeywords(v)
+		}
+	}
+}
+
+func (s *imageServer) startCron() {
+	c := cron.New()
+	c.AddFunc("@every 30s", s.refreshImageAndSendFunc())
+	c.Start()
 }
 
 func main() {
@@ -188,10 +224,7 @@ func main() {
 	initVars()
 	pb.RegisterImageServer(grpcServer, s)
 
-	// test
-	go s.sendWord(rooms[0], "cat")
-	i := s.getRandomImage()
-	go s.testGetImage(rooms[0], i.Url)
+	s.startCron()
 
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve Chat: %v", err)

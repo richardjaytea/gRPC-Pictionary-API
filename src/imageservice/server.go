@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"time"
 
 	"github.com/golang/protobuf/ptypes/empty"
 	c "github.com/richardjaytea/infipic/config"
@@ -74,7 +73,6 @@ func (s *imageServer) GetImage(r *pb.Room, stream pb.Image_GetImageServer) error
 }
 
 func (s *imageServer) sendKeywords(roomKey string) {
-	time.Sleep(5 * time.Second)
 	s.sendWord(roomKey, "@SysClearWords")
 	for _, k := range roomWord[roomKey] {
 		s.sendWord(roomKey, k)
@@ -91,7 +89,6 @@ func (s *imageServer) sendWord(roomKey string, word string) {
 }
 
 func (s *imageServer) sendImage(roomKey string) {
-	time.Sleep(5 * time.Second)
 	for _, stream := range s.roomImageStreams[roomKey] {
 		if stream != nil && *stream != nil {
 			if err := (*stream).Send(&pb.ImageResponse{
@@ -143,7 +140,6 @@ func (s *imageServer) getRandomImage(roomKey string) {
 	stmt := "SELECT photo_id, photo_image_url FROM unsplash_photos ORDER BY random() LIMIT 1"
 	s.DB.QueryRow(stmt).Scan(&i.Id, &i.Url)
 
-	log.Println(i)
 	roomImage[roomKey] = i
 }
 

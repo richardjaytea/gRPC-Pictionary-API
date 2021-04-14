@@ -148,8 +148,6 @@ func keepWordUpdated(stream pb.Image_GetWordClient, roomKey string) {
 		}
 
 		roomWords[roomKey] = append(roomWords[roomKey], word.GetWord())
-		log.Printf("Got Word: %s", word.GetWord())
-		log.Println(roomWords[roomKey])
 	}
 }
 

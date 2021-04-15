@@ -33,6 +33,7 @@ var (
 	rooms     = []string{"test_room"}
 	roomWords map[string][]string
 	userWords map[string][]string
+	userNames map[string]string
 )
 
 type messageStreamMap map[string]*pb.Chat_GetMessagesServer
@@ -43,14 +44,15 @@ type chatServer struct {
 	imageClient     pb.ImageClient
 }
 
-func (s *chatServer) ConnectChat(ctx context.Context, r *pb.Room) (*pb.Client, error) {
+func (s *chatServer) ConnectChat(ctx context.Context, r *pb.UserRequest) (*pb.Client, error) {
 	id := uuid.NewString()
-	s.roomChatStreams[r.Key][id] = nil
+	s.roomChatStreams[r.RoomKey][id] = nil
 	userWords[id] = nil
+	userNames[id] = r.Name
 
 	log.Printf("New Client Connection: %s", id)
-	s.broadcastWelcomeMessage(ctx, id, r.Key)
-	return &pb.Client{Id: id, RoomKey: r.Key}, nil
+	s.broadcastWelcomeMessage(ctx, id, r.RoomKey)
+	return &pb.Client{Id: id, RoomKey: r.RoomKey}, nil
 }
 
 func (s *chatServer) GetMessages(client *pb.Client, stream pb.Chat_GetMessagesServer) error {
@@ -64,16 +66,13 @@ func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest
 	if contains(roomWords[message.RoomKey], message.Content) {
 		stream := s.roomChatStreams[message.RoomKey][message.Id]
 		if contains(userWords[message.Id], message.Content) {
-			log.Println("Duplicate Guess!")
 			(*stream).Send(buildMessageResponse("Server ID", "You have already correctly guessed this word!"))
 		} else {
-			log.Println("Correct Guess!")
 			userWords[message.Id] = append(userWords[message.Id], message.Content)
 			(*stream).Send(buildMessageResponse("Server ID", "Your guess is correct!"))
 		}
 	} else {
-		log.Println("Broadcasting Message")
-		response := buildMessageResponse(message.Id, message.Content)
+		response := buildMessageResponse(userNames[message.Id], message.Content)
 		for _, stream := range s.roomChatStreams[message.RoomKey] {
 			if stream != nil && *stream != nil {
 				if err := (*stream).Send(response); err != nil {
@@ -87,9 +86,9 @@ func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest
 	return &emp, nil
 }
 
-func buildMessageResponse(id string, content string) *pb.MessageResponse {
+func buildMessageResponse(name, content string) *pb.MessageResponse {
 	return &pb.MessageResponse{
-		Id:        id,
+		Name:      name,
 		Content:   content,
 		Timestamp: time.Now().Format(time.RFC822),
 	}
@@ -101,7 +100,7 @@ func (s *chatServer) broadcastWelcomeMessage(ctx context.Context, id string, roo
 		&pb.MessageRequest{
 			Id:      id,
 			RoomKey: roomKey,
-			Content: fmt.Sprintf("Welcome %s", id),
+			Content: fmt.Sprintf("Welcome %s", userNames[id]),
 		},
 	)
 }
@@ -177,6 +176,7 @@ func newServer() *chatServer {
 	}
 	roomWords = make(map[string][]string)
 	userWords = make(map[string][]string)
+	userNames = make(map[string]string)
 
 	for _, v := range rooms {
 		s.roomChatStreams[v] = messageStreamMap{}

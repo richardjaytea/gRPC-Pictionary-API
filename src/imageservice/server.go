@@ -80,11 +80,12 @@ func (s *imageServer) sendKeywords(roomKey string) {
 }
 
 func (s *imageServer) sendWord(roomKey string, word string) {
-	stream := *s.roomWordStreams[roomKey]
-	if err := stream.Send(&pb.WordResponse{
-		Word: word,
-	}); err != nil {
-		log.Println(err)
+	if stream, ok := s.roomWordStreams[roomKey]; ok {
+		if err := (*stream).Send(&pb.WordResponse{
+			Word: word,
+		}); err != nil {
+			log.Println(err)
+		}
 	}
 }
 

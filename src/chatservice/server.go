@@ -46,9 +46,9 @@ type chatServer struct {
 func (s *chatServer) GetMessages(m *pb.MessageStreamRequest, stream pb.Chat_GetMessagesServer) error {
 	s.roomChatStreams[m.RoomKey][m.Id] = &stream
 	userNames[m.Id] = m.Name
+	s.broadcastMessage(m.RoomKey, buildMessageResponse("Server ID", fmt.Sprintf("Welcome %s", m.Name)))
 	log.Printf("Added Stream: %s", m.Id)
 	s.keepAliveTillClose(m.Id, m.RoomKey)
-	// s.broadcastWelcomeMessage(ctx, id, r.RoomKey)
 	return nil
 }
 
@@ -63,17 +63,20 @@ func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest
 		}
 	} else {
 		response := buildMessageResponse(userNames[message.Id], message.Content)
-		for _, stream := range s.roomChatStreams[message.RoomKey] {
-			if stream != nil && *stream != nil {
-				if err := (*stream).Send(response); err != nil {
-					log.Println(err)
-					return &emp, err
-				}
-			}
-		}
+		s.broadcastMessage(message.RoomKey, response)
 	}
 
 	return &emp, nil
+}
+
+func (s *chatServer) broadcastMessage(roomKey string, m *pb.MessageResponse) {
+	for _, stream := range s.roomChatStreams[roomKey] {
+		if stream != nil && *stream != nil {
+			if err := (*stream).Send(m); err != nil {
+				log.Println(err)
+			}
+		}
+	}
 }
 
 func buildMessageResponse(name, content string) *pb.MessageResponse {
@@ -82,17 +85,6 @@ func buildMessageResponse(name, content string) *pb.MessageResponse {
 		Content:   content,
 		Timestamp: time.Now().Format(time.RFC822),
 	}
-}
-
-func (s *chatServer) broadcastWelcomeMessage(ctx context.Context, id string, roomKey string) {
-	_, _ = s.SendMessage(
-		ctx,
-		&pb.MessageRequest{
-			Id:      id,
-			RoomKey: roomKey,
-			Content: fmt.Sprintf("Welcome %s", userNames[id]),
-		},
-	)
 }
 
 func (s *chatServer) keepAliveTillClose(id string, roomKey string) {

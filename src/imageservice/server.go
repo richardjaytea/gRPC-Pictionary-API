@@ -34,7 +34,7 @@ var (
 	roomWord  map[string][]string
 )
 
-type imageStreams []*pb.Image_GetImageServer
+type imageStreams map[string]*pb.Image_GetImageServer
 
 type imageServer struct {
 	pb.UnimplementedImageServer
@@ -60,14 +60,14 @@ func (s *imageServer) GetWord(r *pb.Room, stream pb.Image_GetWordServer) error {
 	}
 }
 
-func (s *imageServer) GetImage(r *pb.Room, stream pb.Image_GetImageServer) error {
-	s.roomImageStreams[r.Key] = append(s.roomImageStreams[r.Key], &stream)
-	log.Printf("Image Stream Created: %s", r.Key)
+func (s *imageServer) GetImage(r *pb.Client, stream pb.Image_GetImageServer) error {
+	s.roomImageStreams[r.RoomKey][r.Id] = &stream
+	log.Printf("Image Stream Created: %s %s", r.RoomKey, r.Id)
 	select {
 	case <-stream.Context().Done():
 		// TODO: Lock map for deletion?
-		delete(s.roomImageStreams, r.Key)
-		log.Printf("Image Connection Disconnected: %s", r.Key)
+		delete(s.roomImageStreams[r.RoomKey], r.Id)
+		log.Printf("Image Connection Disconnected: %s %s", r.RoomKey, r.Id)
 		return nil
 	}
 }
@@ -126,6 +126,10 @@ func newServer() *imageServer {
 		roomImageStreams: make(map[string]imageStreams),
 		roomWordStreams:  make(map[string]*pb.Image_GetWordServer),
 		DB:               db,
+	}
+
+	for _, v := range rooms {
+		s.roomImageStreams[v] = imageStreams{}
 	}
 
 	return s

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/ptypes/empty"
-	"github.com/google/uuid"
 	"github.com/richardjaytea/infipic/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -44,21 +43,12 @@ type chatServer struct {
 	imageClient     pb.ImageClient
 }
 
-func (s *chatServer) ConnectChat(ctx context.Context, r *pb.UserRequest) (*pb.Client, error) {
-	id := uuid.NewString()
-	s.roomChatStreams[r.RoomKey][id] = nil
-	userWords[id] = nil
-	userNames[id] = r.Name
-
-	log.Printf("New Client Connection: %s", id)
-	s.broadcastWelcomeMessage(ctx, id, r.RoomKey)
-	return &pb.Client{Id: id, RoomKey: r.RoomKey}, nil
-}
-
-func (s *chatServer) GetMessages(client *pb.Client, stream pb.Chat_GetMessagesServer) error {
-	s.roomChatStreams[client.RoomKey][client.Id] = &stream
-	log.Printf("Added Stream: %s", client.Id)
-	s.keepAliveTillClose(client.Id, client.RoomKey)
+func (s *chatServer) GetMessages(m *pb.MessageStreamRequest, stream pb.Chat_GetMessagesServer) error {
+	s.roomChatStreams[m.RoomKey][m.Id] = &stream
+	userNames[m.Id] = m.Name
+	log.Printf("Added Stream: %s", m.Id)
+	s.keepAliveTillClose(m.Id, m.RoomKey)
+	// s.broadcastWelcomeMessage(ctx, id, r.RoomKey)
 	return nil
 }
 

@@ -62,6 +62,7 @@ func (s *imageServer) GetWord(r *pb.Room, stream pb.Image_GetWordServer) error {
 
 func (s *imageServer) GetImage(r *pb.Client, stream pb.Image_GetImageServer) error {
 	s.roomImageStreams[r.RoomKey][r.Id] = &stream
+	s.sendImageToUser(r.RoomKey, r.Id)
 	log.Printf("Image Stream Created: %s %s", r.RoomKey, r.Id)
 	select {
 	case <-stream.Context().Done():
@@ -97,6 +98,16 @@ func (s *imageServer) sendImage(roomKey string) {
 			}); err != nil {
 				log.Println(err)
 			}
+		}
+	}
+}
+
+func (s *imageServer) sendImageToUser(roomKey string, id string) {
+	if stream, ok := s.roomImageStreams[roomKey][id]; ok {
+		if err := (*stream).Send(&pb.ImageResponse{
+			Content: roomImage[roomKey].Url,
+		}); err != nil {
+			log.Println(err)
 		}
 	}
 }

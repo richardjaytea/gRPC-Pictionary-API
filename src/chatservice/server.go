@@ -46,7 +46,7 @@ type chatServer struct {
 func (s *chatServer) GetMessages(m *pb.MessageStreamRequest, stream pb.Chat_GetMessagesServer) error {
 	s.roomChatStreams[m.RoomKey][m.Id] = &stream
 	userNames[m.Id] = m.Name
-	s.broadcastMessage(m.RoomKey, buildMessageResponse("Server ID", fmt.Sprintf("Welcome %s", m.Name)))
+	s.broadcastMessage(m.RoomKey, buildMessageResponse("*System*", fmt.Sprintf("Welcome %s!", m.Name)))
 	log.Printf("Added Stream: %s", m.Id)
 	s.keepAliveTillClose(m.Id, m.RoomKey)
 	return nil
@@ -56,10 +56,10 @@ func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest
 	if contains(roomWords[message.RoomKey], message.Content) {
 		stream := s.roomChatStreams[message.RoomKey][message.Id]
 		if contains(userWords[message.Id], message.Content) {
-			(*stream).Send(buildMessageResponse("Server ID", "You have already correctly guessed this word!"))
+			(*stream).Send(buildMessageResponse("*System*", "You have already correctly guessed this word!"))
 		} else {
 			userWords[message.Id] = append(userWords[message.Id], message.Content)
-			(*stream).Send(buildMessageResponse("Server ID", "Your guess is correct!"))
+			(*stream).Send(buildMessageResponse("*System*", "Your guess is correct!"))
 		}
 	} else {
 		response := buildMessageResponse(userNames[message.Id], message.Content)
@@ -100,7 +100,7 @@ func (s *chatServer) keepAliveTillClose(id string, roomKey string) {
 
 func (s *chatServer) getImageWord() {
 	for _, v := range rooms {
-		stream, err := s.imageClient.GetWord(
+		stream, err := s.imageClient.GetWords(
 			context.Background(),
 			&pb.Room{
 				Key: v,
@@ -112,7 +112,7 @@ func (s *chatServer) getImageWord() {
 	}
 }
 
-func keepWordUpdated(stream pb.Image_GetWordClient, roomKey string) {
+func keepWordUpdated(stream pb.Image_GetWordsClient, roomKey string) {
 	for {
 		word, err := stream.Recv()
 
@@ -123,12 +123,8 @@ func keepWordUpdated(stream pb.Image_GetWordClient, roomKey string) {
 			log.Fatalf("keepWordUpdated(_) = _, %v", err)
 		}
 
-		if word.GetWord() == "@SysClearWords" {
-			clearWords(roomKey)
-			continue
-		}
-
-		roomWords[roomKey] = append(roomWords[roomKey], word.GetWord())
+		clearWords(roomKey)
+		roomWords[roomKey] = word.GetWords()
 	}
 }
 

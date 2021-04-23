@@ -52,7 +52,7 @@ message MessageResponse {
 
 service Image {
   rpc GetImage(Client) returns (stream ImageResponse) {}
-  rpc GetWord(Room) returns (stream WordResponse) {}
+  rpc GetWords(Room) returns (stream WordResponse) {}
   rpc GetCountdown(Room) returns (stream CountdownResponse) {}
 }
 
@@ -65,7 +65,7 @@ message ImageResponse {
 }
 
 message WordResponse {
-  string word = 1;
+  repeated string words = 1;
 }
 
 message CountdownResponse {

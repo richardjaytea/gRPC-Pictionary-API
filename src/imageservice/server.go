@@ -39,7 +39,7 @@ type imageStreams map[string]*pb.Image_GetImageServer
 type imageServer struct {
 	pb.UnimplementedImageServer
 	roomImageStreams map[string]imageStreams
-	roomWordStreams  map[string]*pb.Image_GetWordServer
+	roomWordStreams  map[string]*pb.Image_GetWordsServer
 	DB               *sql.DB
 }
 
@@ -48,7 +48,7 @@ type image struct {
 	Url string `json:"photo_image_url"`
 }
 
-func (s *imageServer) GetWord(r *pb.Room, stream pb.Image_GetWordServer) error {
+func (s *imageServer) GetWords(r *pb.Room, stream pb.Image_GetWordsServer) error {
 	s.roomWordStreams[r.Key] = &stream
 	log.Printf("Word Stream Created: %s", r.Key)
 	select {
@@ -73,17 +73,10 @@ func (s *imageServer) GetImage(r *pb.Client, stream pb.Image_GetImageServer) err
 	}
 }
 
-func (s *imageServer) sendKeywords(roomKey string) {
-	s.sendWord(roomKey, "@SysClearWords")
-	for _, k := range roomWord[roomKey] {
-		s.sendWord(roomKey, k)
-	}
-}
-
-func (s *imageServer) sendWord(roomKey string, word string) {
+func (s *imageServer) sendWords(roomKey string) {
 	if stream, ok := s.roomWordStreams[roomKey]; ok {
 		if err := (*stream).Send(&pb.WordResponse{
-			Word: word,
+			Words: roomWord[roomKey],
 		}); err != nil {
 			log.Println(err)
 		}
@@ -135,7 +128,7 @@ func newServer() *imageServer {
 
 	s := &imageServer{
 		roomImageStreams: make(map[string]imageStreams),
-		roomWordStreams:  make(map[string]*pb.Image_GetWordServer),
+		roomWordStreams:  make(map[string]*pb.Image_GetWordsServer),
 		DB:               db,
 	}
 
@@ -200,7 +193,7 @@ func (s *imageServer) refreshImageAndSendFunc() func() {
 			s.getRandomImage(v)
 			s.getImageKeywords(v)
 			go s.sendImage(v)
-			go s.sendKeywords(v)
+			go s.sendWords(v)
 		}
 	}
 }

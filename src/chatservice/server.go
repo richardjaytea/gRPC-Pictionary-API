@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/golang/protobuf/ptypes/empty"
@@ -53,12 +54,14 @@ func (s *chatServer) GetMessages(m *pb.MessageStreamRequest, stream pb.Chat_GetM
 }
 
 func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest) (*empty.Empty, error) {
-	if contains(roomWords[message.RoomKey], message.Content) {
+	m := strings.ToLower(strings.TrimSpace(message.Content))
+
+	if contains(roomWords[message.RoomKey], m) {
 		stream := s.roomChatStreams[message.RoomKey][message.Id]
-		if contains(userWords[message.Id], message.Content) {
+		if contains(userWords[message.Id], m) {
 			(*stream).Send(buildMessageResponse("*System*", "You have already correctly guessed this word!"))
 		} else {
-			userWords[message.Id] = append(userWords[message.Id], message.Content)
+			userWords[message.Id] = append(userWords[message.Id], m)
 			(*stream).Send(buildMessageResponse("*System*", "Your guess is correct!"))
 		}
 	} else {

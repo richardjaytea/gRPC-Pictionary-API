@@ -35,11 +35,12 @@ var (
 )
 
 type imageStreams map[string]*pb.Image_GetImageServer
+type wordStreams map[string]*pb.Image_GetWordsServer
 
 type imageServer struct {
 	pb.UnimplementedImageServer
 	roomImageStreams map[string]imageStreams
-	roomWordStreams  map[string]*pb.Image_GetWordsServer
+	roomWordStreams  map[string]wordStreams
 	DB               *sql.DB
 }
 
@@ -48,14 +49,15 @@ type image struct {
 	Url string `json:"photo_image_url"`
 }
 
-func (s *imageServer) GetWords(r *pb.Room, stream pb.Image_GetWordsServer) error {
-	s.roomWordStreams[r.Key] = &stream
-	log.Printf("Word Stream Created: %s", r.Key)
+func (s *imageServer) GetWords(r *pb.Client, stream pb.Image_GetWordsServer) error {
+	s.roomWordStreams[r.RoomKey][r.Id] = &stream
+	s.sendWordsToUser(r.RoomKey, r.Id)
+	log.Printf("Word Stream Created: %s %s", r.RoomKey, r.Id)
 	select {
 	case <-stream.Context().Done():
 		// TODO: Lock map for deletion?
-		delete(s.roomWordStreams, r.Key)
-		log.Printf("Word Connection Disconnected: %s", r.Key)
+		delete(s.roomWordStreams[r.RoomKey], r.Id)
+		log.Printf("Word Connection Disconnected: %s %s", r.RoomKey, r.Id)
 		return nil
 	}
 }
@@ -74,7 +76,7 @@ func (s *imageServer) GetImage(r *pb.Client, stream pb.Image_GetImageServer) err
 }
 
 func (s *imageServer) sendWords(roomKey string) {
-	if stream, ok := s.roomWordStreams[roomKey]; ok {
+	for _, stream := range s.roomWordStreams[roomKey] {
 		if err := (*stream).Send(&pb.WordResponse{
 			Words: roomWord[roomKey],
 		}); err != nil {
@@ -105,6 +107,16 @@ func (s *imageServer) sendImageToUser(roomKey string, id string) {
 	}
 }
 
+func (s *imageServer) sendWordsToUser(roomKey string, id string) {
+	if stream, ok := s.roomWordStreams[roomKey][id]; ok {
+		if err := (*stream).Send(&pb.WordResponse{
+			Words: roomWord[roomKey],
+		}); err != nil {
+			log.Println(err)
+		}
+	}
+}
+
 func newServer() *imageServer {
 	connectionString := fmt.Sprintf("host=%s port=%s user=%s "+
 		"password=%s dbname=%s sslmode=disable",
@@ -128,12 +140,13 @@ func newServer() *imageServer {
 
 	s := &imageServer{
 		roomImageStreams: make(map[string]imageStreams),
-		roomWordStreams:  make(map[string]*pb.Image_GetWordsServer),
+		roomWordStreams:  make(map[string]wordStreams),
 		DB:               db,
 	}
 
 	for _, v := range rooms {
 		s.roomImageStreams[v] = imageStreams{}
+		s.roomWordStreams[v] = wordStreams{}
 	}
 
 	return s
@@ -165,7 +178,8 @@ func (s *imageServer) getImageKeywords(roomKey string) {
 				and ai_service_2_confidence > 40.0))
 				and suggested_by_user = false
 			order by
-				ai_service_1_confidence desc`
+				ai_service_1_confidence desc
+			limit 6`
 
 	id := roomImage[roomKey].Id
 	r, err := s.DB.Query(stmt, id)

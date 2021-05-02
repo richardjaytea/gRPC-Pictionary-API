@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"log"
 	"net"
@@ -30,6 +31,7 @@ var (
 )
 
 var (
+	id        = "service-" + uuid.NewString()
 	rooms     = []string{"test_room"}
 	roomWords map[string][]string
 	userWords map[string][]string
@@ -105,8 +107,9 @@ func (s *chatServer) getImageWord() {
 	for _, v := range rooms {
 		stream, err := s.imageClient.GetWords(
 			context.Background(),
-			&pb.Room{
-				Key: v,
+			&pb.Client{
+				Id:      id,
+				RoomKey: v,
 			})
 		if err != nil {
 			log.Fatalf("%v.GetWord(_) = _, %v", s.imageClient, err)

@@ -55,7 +55,7 @@ func (s *chatServer) GetMessages(m *pb.MessageStreamRequest, stream pb.Chat_GetM
 	return nil
 }
 
-func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest) (*empty.Empty, error) {
+func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest) (*pb.MatchWordResponse, error) {
 	m := strings.ToLower(strings.TrimSpace(message.Content))
 
 	if contains(roomWords[message.RoomKey], m) {
@@ -65,13 +65,14 @@ func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest
 		} else {
 			userWords[message.Id] = append(userWords[message.Id], m)
 			(*stream).Send(buildMessageResponse("*System*", "Your guess is correct!"))
+			return &pb.MatchWordResponse{Match: true}, nil
 		}
 	} else {
 		response := buildMessageResponse(userNames[message.Id], message.Content)
 		s.broadcastMessage(message.RoomKey, response)
 	}
 
-	return &emp, nil
+	return &pb.MatchWordResponse{Match: false}, nil
 }
 
 func (s *chatServer) broadcastMessage(roomKey string, m *pb.MessageResponse) {

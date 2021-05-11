@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -19,29 +20,30 @@ import (
 )
 
 var (
-	tls        = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
-	certFile   = flag.String("cert_file", "", "The TLS cert file")
-	keyFile    = flag.String("key_file", "", "The TLS key file")
-	jsonDBFile = flag.String("json_db_file", "", "A json file containing a list of features")
-	port       = flag.Int("port", 10001, "The server port")
-	emp        = empty.Empty{}
+	tls                = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
+	certFile           = flag.String("cert_file", "", "The TLS cert file")
+	keyFile            = flag.String("key_file", "", "The TLS key file")
+	jsonDBFile         = flag.String("json_db_file", "", "A json file containing a list of features")
+	port               = flag.Int("port", 10001, "The server port")
+	emp                = empty.Empty{}
+	caFile             = flag.String("ca_file", "", "The file containing the CA root cert file")
+	serverAddrRoom     = flag.String("server_addr_room", "localhost:10003", "The server address for the room service server")
+	serverHostOverride = flag.String("server_host_override", "x.test.youtube.com", "The server name used to verify the hostname returned by the TLS handshake")
 )
 
 var (
-	// TODO: room_key should be coming from database
-	rooms     = []string{"test_room"}
+	rooms     []string
 	roomImage map[string]image
 	roomWord  map[string][]string
 )
 
-type imageStreams map[string]*pb.Image_GetImageServer
-type wordStreams map[string]*pb.Image_GetWordsServer
+type imageWordStreams map[string]*pb.Image_GetImageAndWordsServer
 
 type imageServer struct {
 	pb.UnimplementedImageServer
-	roomImageStreams map[string]imageStreams
-	roomWordStreams  map[string]wordStreams
-	DB               *sql.DB
+	roomImageWordStreams map[string]imageWordStreams
+	roomClient           pb.RoomClient
+	DB                   *sql.DB
 }
 
 type image struct {
@@ -49,47 +51,25 @@ type image struct {
 	Url string `json:"photo_image_url"`
 }
 
-func (s *imageServer) GetWords(r *pb.Client, stream pb.Image_GetWordsServer) error {
-	s.roomWordStreams[r.RoomKey][r.Id] = &stream
-	s.sendWordsToUser(r.RoomKey, r.Id)
-	log.Printf("Word Stream Created: %s %s", r.RoomKey, r.Id)
-	select {
-	case <-stream.Context().Done():
-		// TODO: Lock map for deletion?
-		delete(s.roomWordStreams[r.RoomKey], r.Id)
-		log.Printf("Word Connection Disconnected: %s %s", r.RoomKey, r.Id)
-		return nil
-	}
-}
-
-func (s *imageServer) GetImage(r *pb.Client, stream pb.Image_GetImageServer) error {
-	s.roomImageStreams[r.RoomKey][r.Id] = &stream
+func (s *imageServer) GetImageAndWords(r *pb.Client, stream pb.Image_GetImageAndWordsServer) error {
+	s.roomImageWordStreams[r.RoomKey][r.Id] = &stream
 	s.sendImageToUser(r.RoomKey, r.Id)
-	log.Printf("Image Stream Created: %s %s", r.RoomKey, r.Id)
+	log.Printf("ImageWord Stream Created: %s %s", r.RoomKey, r.Id)
 	select {
 	case <-stream.Context().Done():
 		// TODO: Lock map for deletion?
-		delete(s.roomImageStreams[r.RoomKey], r.Id)
-		log.Printf("Image Connection Disconnected: %s %s", r.RoomKey, r.Id)
+		delete(s.roomImageWordStreams[r.RoomKey], r.Id)
+		log.Printf("ImageWord Connection Disconnected: %s %s", r.RoomKey, r.Id)
 		return nil
 	}
 }
 
-func (s *imageServer) sendWords(roomKey string) {
-	for _, stream := range s.roomWordStreams[roomKey] {
-		if err := (*stream).Send(&pb.WordResponse{
-			Words: roomWord[roomKey],
-		}); err != nil {
-			log.Println(err)
-		}
-	}
-}
-
-func (s *imageServer) sendImage(roomKey string) {
-	for _, stream := range s.roomImageStreams[roomKey] {
+func (s *imageServer) sendImageAndWords(roomKey string) {
+	for _, stream := range s.roomImageWordStreams[roomKey] {
 		if stream != nil && *stream != nil {
-			if err := (*stream).Send(&pb.ImageResponse{
+			if err := (*stream).Send(&pb.ImageWordResponse{
 				Content: roomImage[roomKey].Url,
+				Words:   roomWord[roomKey],
 			}); err != nil {
 				log.Println(err)
 			}
@@ -98,19 +78,10 @@ func (s *imageServer) sendImage(roomKey string) {
 }
 
 func (s *imageServer) sendImageToUser(roomKey string, id string) {
-	if stream, ok := s.roomImageStreams[roomKey][id]; ok {
-		if err := (*stream).Send(&pb.ImageResponse{
+	if stream, ok := s.roomImageWordStreams[roomKey][id]; ok {
+		if err := (*stream).Send(&pb.ImageWordResponse{
 			Content: roomImage[roomKey].Url,
-		}); err != nil {
-			log.Println(err)
-		}
-	}
-}
-
-func (s *imageServer) sendWordsToUser(roomKey string, id string) {
-	if stream, ok := s.roomWordStreams[roomKey][id]; ok {
-		if err := (*stream).Send(&pb.WordResponse{
-			Words: roomWord[roomKey],
+			Words:   roomWord[roomKey],
 		}); err != nil {
 			log.Println(err)
 		}
@@ -139,22 +110,33 @@ func newServer() *imageServer {
 	log.Println("Connected to database!")
 
 	s := &imageServer{
-		roomImageStreams: make(map[string]imageStreams),
-		roomWordStreams:  make(map[string]wordStreams),
-		DB:               db,
+		roomImageWordStreams: make(map[string]imageWordStreams),
+		DB:                   db,
 	}
+	roomImage = make(map[string]image)
+	roomWord = make(map[string][]string)
+
+	s.connectServices()
 
 	for _, v := range rooms {
-		s.roomImageStreams[v] = imageStreams{}
-		s.roomWordStreams[v] = wordStreams{}
+		s.roomImageWordStreams[v] = imageWordStreams{}
+		roomImage[v] = image{}
+		roomWord[v] = []string{}
 	}
 
 	return s
 }
 
-func initVars() {
-	roomImage = make(map[string]image)
-	roomWord = make(map[string][]string)
+func (s *imageServer) getRooms() {
+	r, err := s.roomClient.GetRooms(context.Background(), &empty.Empty{})
+	if err != nil {
+		log.Fatal("error in trying to get rooms from room service")
+		return
+	}
+
+	for _, v := range r.Rooms {
+		rooms = append(rooms, v.GetKey())
+	}
 }
 
 func (s *imageServer) getRandomImage(roomKey string) {
@@ -177,6 +159,8 @@ func (s *imageServer) getImageKeywords(roomKey string) {
 				or (ai_service_2_confidence is not null
 				and ai_service_2_confidence > 40.0))
 				and suggested_by_user = false
+				and keyword not like '% %'
+				and keyword not like '%-%'
 			order by
 				ai_service_1_confidence desc
 			limit 6`
@@ -206,8 +190,7 @@ func (s *imageServer) refreshImageAndSendFunc() func() {
 		for _, v := range rooms {
 			s.getRandomImage(v)
 			s.getImageKeywords(v)
-			go s.sendImage(v)
-			go s.sendWords(v)
+			go s.sendImageAndWords(v)
 		}
 	}
 }
@@ -216,6 +199,33 @@ func (s *imageServer) startCron() {
 	c := cron.New()
 	c.AddFunc("@every 30s", s.refreshImageAndSendFunc())
 	c.Start()
+}
+
+func (s *imageServer) connectServices() {
+	flag.Parse()
+	var opts []grpc.DialOption
+	if *tls {
+		if *caFile == "" {
+			*caFile = data.Path("x509/ca_cert.pem")
+		}
+		creds, err := credentials.NewClientTLSFromFile(*caFile, *serverHostOverride)
+		if err != nil {
+			log.Fatalf("Failed to create TLS credentials %v", err)
+		}
+		opts = append(opts, grpc.WithTransportCredentials(creds))
+	} else {
+		opts = append(opts, grpc.WithInsecure())
+	}
+
+	opts = append(opts, grpc.WithBlock())
+
+	conn, err := grpc.Dial(*serverAddrRoom, opts...)
+	if err != nil {
+		log.Fatalf("fail to dial: %v", err)
+	}
+
+	s.roomClient = pb.NewRoomClient(conn)
+	s.getRooms()
 }
 
 func main() {
@@ -240,7 +250,6 @@ func main() {
 	}
 	grpcServer := grpc.NewServer(opts...)
 	s := newServer()
-	initVars()
 	pb.RegisterImageServer(grpcServer, s)
 
 	s.startCron()

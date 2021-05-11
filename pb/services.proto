@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package pb;
 
+import "google/protobuf/empty.proto";
+
 option go_package = "github.com/richardjaytea/infipic/pb";
 
 /******************** GLOBAL MESSAGES  **********************/
@@ -13,7 +15,7 @@ message Client {
 
 /******************** AUTH SERVICE  **********************/
 service Auth {
-  rpc Authenticate(AuthRequest) returns (Client) {}
+  rpc Authenticate(AuthRequest) returns (Client);
 }
 
 message AuthRequest {
@@ -21,11 +23,25 @@ message AuthRequest {
   string roomKey = 2;
 }
 
+/******************** ROOM SERVICE  **********************/
+service Room {
+  rpc GetRooms(google.protobuf.Empty) returns (RoomResponse);
+}
+
+message RoomDetail {
+  string name = 1;
+  string key = 2;
+}
+
+message RoomResponse {
+  repeated RoomDetail rooms = 1;
+}
+
 /******************** CHAT SERVICE  **********************/
 
 service Chat {
-  rpc GetMessages(MessageStreamRequest) returns (stream MessageResponse) {}
-  rpc SendMessage(MessageRequest) returns (MatchWordResponse) {}
+  rpc GetMessages(MessageStreamRequest) returns (stream MessageResponse);
+  rpc SendMessage(MessageRequest) returns (MatchWordResponse);
 }
 
 message MessageStreamRequest {
@@ -53,23 +69,10 @@ message MatchWordResponse {
 /******************** IMAGE SERVICE  **********************/
 
 service Image {
-  rpc GetImage(Client) returns (stream ImageResponse) {}
-  rpc GetWords(Client) returns (stream WordResponse) {}
-  rpc GetCountdown(Room) returns (stream CountdownResponse) {}
+  rpc GetImageAndWords(Client) returns (stream ImageWordResponse);
 }
 
-message Room {
-  string key = 1;
-}
-
-message ImageResponse {
+message ImageWordResponse {
   string content = 1;
-}
-
-message WordResponse {
-  repeated string words = 1;
-}
-
-message CountdownResponse {
-  int32 time = 1;
+  repeated string words = 2;
 }

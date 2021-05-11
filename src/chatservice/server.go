@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/google/uuid"
+	c "github.com/richardjaytea/infipic/config"
 	"io"
 	"log"
 	"net"
@@ -27,12 +28,13 @@ var (
 	emp                = empty.Empty{}
 	caFile             = flag.String("ca_file", "", "The file containing the CA root cert file")
 	serverAddrImage    = flag.String("server_addr_image", "localhost:10001", "The server address for the image service server")
+	serverAddrRoom     = flag.String("server_addr_room", "localhost:10003", "The server address for the room service server")
 	serverHostOverride = flag.String("server_host_override", "x.test.youtube.com", "The server name used to verify the hostname returned by the TLS handshake")
 )
 
 var (
 	id        = "service-" + uuid.NewString()
-	rooms     = []string{"test_room"}
+	rooms     []string
 	roomWords map[string][]string
 	userWords map[string][]string
 	userNames map[string]string
@@ -44,12 +46,13 @@ type chatServer struct {
 	pb.UnimplementedChatServer
 	roomChatStreams map[string]messageStreamMap
 	imageClient     pb.ImageClient
+	roomClient      pb.RoomClient
 }
 
 func (s *chatServer) GetMessages(m *pb.MessageStreamRequest, stream pb.Chat_GetMessagesServer) error {
 	s.roomChatStreams[m.RoomKey][m.Id] = &stream
 	userNames[m.Id] = m.Name
-	s.broadcastMessage(m.RoomKey, buildMessageResponse("*System*", fmt.Sprintf("Welcome %s!", m.Name)))
+	s.broadcastMessage(m.RoomKey, buildMessageResponse(c.VGetEnv("SYS_CHAT_NAME"), fmt.Sprintf("Welcome %s!", m.Name)))
 	log.Printf("Added Stream: %s", m.Id)
 	s.keepAliveTillClose(m.Id, m.RoomKey)
 	return nil
@@ -61,10 +64,10 @@ func (s *chatServer) SendMessage(ctx context.Context, message *pb.MessageRequest
 	if contains(roomWords[message.RoomKey], m) {
 		stream := s.roomChatStreams[message.RoomKey][message.Id]
 		if contains(userWords[message.Id], m) {
-			(*stream).Send(buildMessageResponse("*System*", "You have already correctly guessed this word!"))
+			(*stream).Send(buildMessageResponse(c.VGetEnv("SYS_CHAT_NAME"), "You have already correctly guessed this word!"))
 		} else {
 			userWords[message.Id] = append(userWords[message.Id], m)
-			(*stream).Send(buildMessageResponse("*System*", "Your guess is correct!"))
+			(*stream).Send(buildMessageResponse(c.VGetEnv("SYS_CHAT_NAME"), "Your guess is correct!"))
 			return &pb.MatchWordResponse{Match: true}, nil
 		}
 	} else {
@@ -106,7 +109,7 @@ func (s *chatServer) keepAliveTillClose(id string, roomKey string) {
 
 func (s *chatServer) getImageWord() {
 	for _, v := range rooms {
-		stream, err := s.imageClient.GetWords(
+		stream, err := s.imageClient.GetImageAndWords(
 			context.Background(),
 			&pb.Client{
 				Id:      id,
@@ -119,7 +122,19 @@ func (s *chatServer) getImageWord() {
 	}
 }
 
-func keepWordUpdated(stream pb.Image_GetWordsClient, roomKey string) {
+func (s *chatServer) getRooms() {
+	r, err := s.roomClient.GetRooms(context.Background(), &empty.Empty{})
+	if err != nil {
+		log.Fatal("error in trying to get rooms from room service")
+		return
+	}
+
+	for _, v := range r.Rooms {
+		rooms = append(rooms, v.GetKey())
+	}
+}
+
+func keepWordUpdated(stream pb.Image_GetImageAndWordsClient, roomKey string) {
 	for {
 		word, err := stream.Recv()
 
@@ -167,7 +182,11 @@ func newServer() *chatServer {
 		s.roomChatStreams[v] = messageStreamMap{}
 	}
 
-	go s.connectServices()
+	s.connectServices()
+
+	for _, v := range rooms {
+		s.roomChatStreams[v] = messageStreamMap{}
+	}
 
 	return s
 }
@@ -189,7 +208,15 @@ func (s *chatServer) connectServices() {
 	}
 
 	opts = append(opts, grpc.WithBlock())
-	conn, err := grpc.Dial(*serverAddrImage, opts...)
+	conn, err := grpc.Dial(*serverAddrRoom, opts...)
+	if err != nil {
+		log.Fatalf("fail to dial: %v", err)
+	}
+
+	s.roomClient = pb.NewRoomClient(conn)
+	s.getRooms()
+
+	conn, err = grpc.Dial(*serverAddrImage, opts...)
 	if err != nil {
 		log.Fatalf("fail to dial: %v", err)
 	}
